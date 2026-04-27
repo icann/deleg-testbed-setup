@@ -1,0 +1,8 @@
+k-deleg-ns.deleg.top knot
+ns1.deleg.top knot
+ns2.deleg.top knot
+ns3.deleg.top knot
+
+
+
+

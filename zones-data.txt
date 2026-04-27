@@ -1,0 +1,82 @@
+^Z k-deleg-ns.deleg.top/test-k.deleg.top
+;;DELEG
+txt-test in txt "17532"
+txt-test in txt "TXT for txt-test at test-k.deleg.top"
+;;Q txt-test.test-k.deleg.top txt
+;;R 17532
+;;C Trivial test that this zone works
+
+just-ns in ns ns1.deleg.top.
+
+ns-and-server-name in ns ns1.deleg.top.
+ns-and-server-name in deleg server-name=ns2.deleg.top.
+
+ns-and-server-ipv4 in ns ns1.deleg.top.
+ns-and-server-ipv4 in deleg server-ipv4=134.199.210.182
+; 134.199.210.182 is the current IPv4 address for ns2.deleg.top; this should be automated later
+
+ns-and-include-delegparam in ns ns1.deleg.top.
+ns-and-include-delegparam in deleg include-delegparam=redirects-ns.test-k.deleg.top.
+redirects-ns in ns ns1.deleg.top.
+
+### just-ns
+
+^Z ns1.deleg.top/just-ns.test-k.deleg.top
+@ in txt "62358"
+@ in txt "Not DELEG-endabled for just-ns.test-k.deleg.top, from ns1"
+;;Q just-ns.test-k.deleg.top txt +de
+;;R 62358
+;;C Sanity test that NS delegation works with just NS even when the server is DELEG-enabled
+
+### ns-and-server-name
+
+^Z ns1.deleg.top/ns-and-server-name.test-k.deleg.top
+@ in txt "43002"
+@ in txt "Not DELEG-enabled for ns-and-server-name.test-k.deleg.top, from ns1"
+;;Q ns-and-server-name.test-k.deleg.top txt
+;;R 43002
+;;C Test for NS delegation when the server is DELEG-enabled and there is a DELEG record with server-name but DE=0
+
+^Z ns2.deleg.top/ns-and-server-name.test-k.deleg.top
+@ in txt "93120"
+@ in txt "DELEG-enabled for ns-and-server-name.test-k.deleg.top gotten by server-name, from ns2"
+;;Q ns-and-server-name.test-k.deleg.top txt +de
+;;R 93120
+;;C Postive test for DELEG delegation when the server is DELEG-enabled and there is a DELEG record with server-name and DE=1
+
+### ns-and-server-ipv4
+
+^Z ns1.deleg.top/ns-and-server-ipv4.test-k.deleg.top
+@ in txt "12773"
+@ in txt "Not DELEG-endabled for ns-and-server-ipv4.test-k.deleg.top, from ns1"
+;;Q ns-and-server-ipv4.test-k.deleg.top txt
+;;R 12773
+;;C Test for DELEG delegation when the server is DELEG-enabled and there is a DELEG record with server-ipv4 but DE=0
+
+^Z ns2.deleg.top/ns-and-server-ipv4.test-k.deleg.top
+@ in txt "DELEG-enabled for ns-and-server-ipv4.test-k.deleg.top gotten by server-ipv4, from ns2"
+@ in txt "53911"
+;;Q ns-and-server-ipv4.test-k.deleg.top txt +de
+;;R 53911
+;;C Postive test for DELEG delegation when the server is DELEG-enabled and there is a DELEG record with server-ipv4 and DE=1
+
+### ns-and-include-delegparam
+
+^Z ns1.deleg.top/ns-and-include-delegparam.test-k.deleg.top
+@ in txt "44992"
+@ in txt "Not DELEG-enabled for ns-and-include-delegparam.test-k.deleg.top, from ns1"
+;;Q ns-and-include-delegparam.test-k.deleg.top txt
+;;R 44992
+;;C Test for NS delegation when the server is DELEG-enabled and there is a DELEG record with server-name and DE=0
+
+^Z ns1.deleg.top/redirects-ns.test-k.deleg.top
+@ in delegparam server-name=ns2.deleg.top.
+; Note that this zone does not need to be DELEG-enabled as long as the nameserver recognizes the DELEGPARAM RRtype
+
+^Z ns2.deleg.top/ns-and-include-delegparam.test-k.deleg.top
+@ in txt "04723"
+@ in txt "DELEG-enabled for ns-and-include-delegparam.test-k.deleg.top gotten indirectly by include-delegparam, from ns2"
+;;Q ns-and-include-delegparam.test-k.deleg.top txt +de
+;;R 04723
+;;C Postive test for DELEG delegation when the server is DELEG-enabled and there is a DELEG record with include-delegparam and DE=1
+

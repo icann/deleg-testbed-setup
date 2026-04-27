@@ -1,0 +1,210 @@
+#!/usr/bin/env -S uv run --script --native-tls
+# /// script
+# dependencies = [ "dnspython" ]
+# ///
+
+""" Part of rrt; creates a directory of zone files for mulitple authoritative servers """
+
+import dns.resolver
+import os
+from pathlib import Path
+import shutil
+
+# The contents of the zone files are stored in a single text file
+#   The text file is line-based, with a "^Z" at the beginning of the line indicating a new server name & zone pair
+#   For example, "^Z ns1.something.example/foo.example" starts the foo.example zonefile served by ns1.something.example
+#   ;;DELEG indicates that the zone should be served from a DELEG-aware authoritative server
+#   ;;Q indicates a query that can test for this zone
+#   ;;R gives a string that should appear in one of the TXT records of the response
+#   ;;C is a comment what response should be expected
+#   ### at the beginning of a line indicates a comment that will not appear in the zone file
+
+# Be sure that the zone data is there
+zones_file = Path("zones-data.txt")
+if not zones_file.exists():
+	exit(f'Did not find file "{str(zones_file)}". Exiting.')
+
+# Be sure that the file with the nameservers is there
+nameserver_file = Path("nameserver-data.txt")
+if not nameserver_file.exists():
+	exit(f'Did not find file "{str(nameserver_file)}". Exiting.')
+all_nameservers = {}
+for this_line in nameserver_file.read_text().splitlines():
+	if this_line != "" and not this_line.startswith("#"):  # Igmore blank lines and comments
+		(nsname, nstype) = this_line.split(" ", maxsplit=1)
+		all_nameservers[nsname] = {"type": nstype}
+
+# Create the directory for the Knot configuration files after backing up the earlier one
+knot_files = Path("for-knot")
+if not knot_files.exists():
+	knot_files.mkdir()
+knot_backup_name = "Local/earlier-for-knot"
+if os.path.exists(knot_backup_name):
+	shutil.rmtree(knot_backup_name)
+knot_files.move(knot_backup_name)
+knot_files.mkdir()
+
+# Create or increment the saved serial number for SOAs
+serial_file = Path("current_serial")
+if serial_file.exists():
+	serial_lines = serial_file.open(mode="rt").read().splitlines()
+	try:
+		current_serial_int = int(serial_lines[0])
+	except Exception:
+		exit(f'First line of "{str(serial_file)}" was "{serial_lines[0]}" instead of an integer. Exiting.')
+	with serial_file.open(mode="wt") as f:
+		f.write(f'{current_serial_int + 1}\n')		
+else:
+	with serial_file.open(mode="wt") as f:
+		f.write("1\n")
+
+# Template for the knot.conf files
+knot_conf_template = """# knot.conf for !ZONE_NAME
+server:
+  user: root:root
+  listen: !IP@53
+log:
+  - target: "/root/log"
+    any: info
+template:
+  - id: default
+    storage: "/root/conf"
+    file: "%s.zone"
+policy:
+  - id: custom_policy
+    signing-threads: 4
+    algorithm: ECDSAP256SHA256
+    zsk-lifetime: 60d
+    deleg-adt: on
+zone:
+"""
+
+# Make the directories for the nameservers and get the IP addresses
+for this_ns in all_nameservers:
+	# Only process Knot for now
+	if all_nameservers[this_ns]["type"] != "knot":
+		exit(f'Found type \"{all_nameservers[this_ns]["type"]}\" that is not "knot". Exiting.')
+	# Get the IP address for this namesever; this saves the last A record found
+	try:
+		a_answers = dns.resolver.resolve(this_ns, "A")
+	except Exception as e:
+		exit(f'Error in resolving "{this_ns}": "{e}". Exiting.')
+	for rdata in a_answers:
+		this_ns_a = rdata.address
+	# Start the knot.conf, but it will be added to later
+	all_nameservers[this_ns]["conf_text"] = knot_conf_template.replace("!ZONE_NAME", this_ns).replace("!IP", this_ns_a)
+	
+# Go through the zones data file
+all_zones_file = zones_file.read_text()
+if not all_zones_file.startswith("^Z"):
+	exit(f'The file "{str(zones_file)}" did not start with "^Z". Exiting.')
+zones_found = {}
+current_zone_key = ""
+current_zone_text = ""
+for this_line in all_zones_file.splitlines(keepends=True):
+	# Check if this line is a comment (starts with ###)
+	if this_line.startswith("###"):
+		continue
+	# Check for start of new zone
+	if this_line.startswith("^Z"):
+		# Finish previous zone, but don't include empty one from the start
+		if current_zone_key:
+			zones_found[current_zone_key] = current_zone_text
+		# Start next zone
+		current_zone_key = this_line[2:].strip()
+		current_zone_text = ""
+		continue
+	else:
+		current_zone_text += this_line
+# Finish out the last zone
+zones_found[current_zone_key] = current_zone_text		
+
+zone_template = """$ORIGIN !DELEGATED_ZONE.
+$TTL 30
+@ IN  SOA example.com. nobody.example.com. !THIS_SERIAL 5m 1m 2w 5m
+@ IN NS !NS_DIR.
+"""
+
+# Go through the zones found to create the zone files, config files, and the queries / responses / comments
+all_qrc = []
+for (this_zone_found, this_zone_text) in zones_found.items():
+	(this_ns, zone_name) = this_zone_found.split("/")
+	if this_ns not in all_nameservers:
+		exit(f'When looking in "{str(zones_file)}", found a NS name "{this_ns}" that is not in "{str(nameserver_file)}". Exiting.')
+	additional_knot_conf_text = f'  - domain: {zone_name}\n'
+	# Always sign all zones
+	additional_knot_conf_text += "    dnssec-signing: on\n    dnssec-policy: custom_policy\n"
+	if ";;DELEG" in this_zone_text:
+		additional_knot_conf_text += "    deleg-aware: on\n"
+	all_nameservers[this_ns]["conf_text"] += additional_knot_conf_text
+	# Create the directory
+	this_ns_dir = knot_files / this_ns
+	this_ns_dir.mkdir(exist_ok=True)
+	this_knot_conf = this_ns_dir / "knot.conf"
+	this_knot_conf.write_text(all_nameservers[this_ns]["conf_text"])
+	this_zone_contents = zone_template.replace("!DELEGATED_ZONE", zone_name).replace("!THIS_SERIAL", str(current_serial_int)).replace("!NS_DIR", zone_name)
+	this_zone_contents += this_zone_text
+	this_zone_file = this_ns_dir / (zone_name + ".zone")
+	this_zone_file.write_text(this_zone_contents)
+	# Save the queries / responses / comments
+	this_qrc = {}
+	for this_line in this_zone_text.splitlines():
+		if this_line.startswith(";;Q"):
+			this_qrc["query"] = this_line[4:]
+		elif this_line.startswith(";;R"):
+			this_qrc["response_id"] = this_line[4:]
+		elif this_line.startswith(";;C"):
+			this_qrc["comment"] = this_line[4:]
+	all_qrc.append(this_qrc)
+
+# Create program for queries and expected responses for Akamai
+akamai_test = """#!/usr/bin/env python3
+import subprocess
+
+to_test = QRC_GOES_HERE
+
+for this_zone_val in to_test:
+	if not this_zone_val.get('query'):
+		continue
+	else:
+		this_zone_name = this_zone_val['query'].split(" ")[0]
+	if "+de" in this_zone_val['query']:
+		res = subprocess.run(f'dig +https=/dns-query {this_zone_name} txt @cs8.res.rwdns.de +short', shell=True, capture_output=True, text=True)
+	else:
+		res = subprocess.run(f'dig {this_zone_name} txt @8.8.8.8 +short', shell=True, capture_output=True, text=True)
+	if res.stderr:
+		print(f'Found an error: {res.stderr}\\n')
+		continue
+	if this_zone_val["response_id"] in res.stdout:
+		print(f'Found expected result, {this_zone_val["response_id"]}, for {this_zone_val['query']}')
+	else:
+		print(f'Did not find expected result for {this_zone_val['query']} in:{res.stdout}')
+""".replace("QRC_GOES_HERE", str(all_qrc))
+akamai_file = Path("run-akamai-tests.py")
+akamai_file.write_text(akamai_test)
+
+# Create program for queries and expected responses for pyresolver
+pyres_test = """#!/usr/bin/env python3
+import subprocess
+
+to_test = QRC_GOES_HERE
+
+for this_zone_val in to_test:
+	if not this_zone_val.get('query'):
+		continue
+	else:
+		this_zone_name = this_zone_val['query'].split(" ")[0]
+	to_run = f'pyresolver --one {this_zone_name}/txt'
+	if "+de" in this_zone_val['query']:
+		to_run += "/de"
+	res = subprocess.run(to_run, shell=True, capture_output=True, text=True)
+	if res.stderr:
+		print(f'Found an error: {res.stderr}\\n')
+		continue
+	if this_zone_val["response_id"] in res.stdout:
+		print(f'Found expected result, {this_zone_val["response_id"]}, for {this_zone_val['query']}')
+	else:
+		print(f'Did not find expected result for {this_zone_val['query']} in:{res.stdout}')
+""".replace("QRC_GOES_HERE", str(all_qrc))
+pyres_file = Path("run-pyresolver-tests.py")
+pyres_file.write_text(pyres_test)

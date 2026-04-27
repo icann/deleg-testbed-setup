@@ -1,0 +1,15 @@
+[project]
+name = "rrt"
+requires-python = ">=3.10"
+
+dependencies = [
+    "dnspython",
+]
+
+[tool.uv.sources]
+dnspython = { git = "https://github.com/rthalley/dnspython", branch = "deleg" }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.9",
+]
