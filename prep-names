@@ -3,7 +3,7 @@
 # dependencies = [ "dnspython" ]
 # ///
 
-""" Part of rrt; creates a directory of zone files for mulitple authoritative servers """
+""" Part of deleg-testing-setup; creates a directory of zone files for mulitple authoritative servers """
 
 import dns.resolver
 import os

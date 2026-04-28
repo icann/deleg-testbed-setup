@@ -46,9 +46,11 @@ packages_for_knot = "git libtool autoconf automake make pkg-config liburcu-dev l
 knot_making_commands = f"cd /root/knot-dns && git checkout deleg_experimental && autoreconf -if && ./configure --prefix={knot_target_dir} && make && make install &&  ldconfig"
 
 if host.get_fact(File, rebuild_canary):
-	apt.packages(name="Check the apt", update=True, packages=packages_for_knot)
+	apt.packages(name="Do the apt", update=True, packages=packages_for_knot)
 	files.directory(name="Remove {knot_git_dir}", path=knot_git_dir, present=False, force=True)
 	files.directory(name=f"Remove {knot_target_dir}", path=knot_target_dir, present=False, force=True)
+	files.directory(name="Add {knot_git_dir}", path=knot_git_dir, present=True, force=True)
+	files.directory(name=f"Add {knot_target_dir}", path=knot_target_dir, present=True, force=True)
 	git.repo(name="Do the git pull", src="https://gitlab.nic.cz/knot/knot-dns.git", dest=knot_git_dir, branch="deleg_experimental")
 	server.shell(name="Make latest Knot", commands=knot_making_commands)
 	files.file(path=rebuild_canary, present=False)
