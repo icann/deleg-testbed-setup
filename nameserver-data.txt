@@ -3,3 +3,4 @@ ns1.deleg.top knot
 ns2.deleg.top knot
 ns3.deleg.top knot
 
+b-deleg-ns.deleg.top bind

@@ -24,7 +24,7 @@ for this_thing in conf_path.glob("*"):
 
 inv_path = conf_path / "inventory.py"
 with inv_path.open(mode="wt") as f:
-	f.write(f'server_hosts = ({sorted(server_names)}, ' + '{"ssh_user": "root", "myvar": "one"})\n')
+	f.write(f'server_hosts = ({sorted(server_names)})\n')
 
 opts_path = conf_path / "operations.py"  # Must end in .py to work with pyinfra
 
@@ -61,6 +61,6 @@ server.shell(name="Start the server", commands=["/root/k/sbin/knotd -c /root/con
 with opts_path.open(mode="wt") as f:
 	f.write(opts_contents)
 
-the_infra_cmd = f'pyinfra -y {str(inv_path)} {str(opts_path)}'
+the_infra_cmd = f'pyinfra -y --ssh-user=root {str(inv_path)} {str(opts_path)}'
 print(the_infra_cmd)
 subprocess.run(the_infra_cmd, shell=True)

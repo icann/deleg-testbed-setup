@@ -82,8 +82,8 @@ zone:
 # Make the directories for the nameservers and get the IP addresses
 for this_ns in all_nameservers:
 	# Only process Knot for now
-	if all_nameservers[this_ns]["type"] != "knot":
-		exit(f'Found type \"{all_nameservers[this_ns]["type"]}\" that is not "knot". Exiting.')
+	#if all_nameservers[this_ns]["type"] != "knot":
+	#	exit(f'Found type \"{all_nameservers[this_ns]["type"]}\" that is not "knot". Exiting.')
 	# Get the IP address for this namesever; this saves the last A record found
 	try:
 		a_answers = dns.resolver.resolve(this_ns, "A")
