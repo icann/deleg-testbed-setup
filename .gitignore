@@ -3,4 +3,5 @@ current_serial
 Local/
 for-knot/
 for-bind/
+for-conf/
 run-*
