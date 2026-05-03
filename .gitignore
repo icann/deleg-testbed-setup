@@ -1,7 +1,5 @@
 current_serial
 *.log
 Local/
-for-knot/
-for-bind/
-for-conf/
+for-hosts/
 run-*

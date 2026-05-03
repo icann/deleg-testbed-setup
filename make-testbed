@@ -9,92 +9,6 @@ import dns.resolver
 from pathlib import Path
 import subprocess
 
-# Prepare the zone files
-
-# The contents of the zone files are stored in a single text file
-#   The text file is line-based, with a "^Z" at the beginning of the line indicating a new server name & zone pair
-#   For example, "^Z ns1.something.example/foo.example" starts the foo.example zonefile served by ns1.something.example
-#   ;;DELEG indicates that the zone should be served from a DELEG-aware authoritative server
-#   ;;Q indicates a query that can test for this zone
-#   ;;R gives a string that should appear in one of the TXT records of the response
-#   ;;C is a comment what response should be expected
-#   ### at the beginning of a line indicates a comment that will not appear in the zone file
-
-# Be sure that the zone data is there
-zones_file = Path("zones-data.txt")
-if not zones_file.exists():
-	exit(f'Did not find file "{str(zones_file)}". Exiting.')
-
-# Be sure that the file with the nameservers is there
-nameserver_file = Path("nameserver-data.txt")
-if not nameserver_file.exists():
-	exit(f'Did not find file "{str(nameserver_file)}". Exiting.')
-all_nameservers = {}
-for this_line in nameserver_file.read_text().splitlines():
-	if this_line != "" and not this_line.startswith("#"):  # Igmore blank lines and comments
-		(this_nsname, this_nstype) = this_line.split(" ", maxsplit=1)
-		all_nameservers[this_nsname] = {"type": this_nstype}
-
-# Make the directories for the nameservers and get the IP addresses
-for this_ns_name in all_nameservers:
-	# Get an IP address for this namesever; this saves the last A record found
-	try:
-		a_answers = dns.resolver.resolve(this_ns_name, "A")
-	except Exception as e:
-		exit(f'Error in getting an A record for "{this_ns_name}": "{e}". Exiting.')
-	for rdata in a_answers:
-		all_nameservers[this_ns_name]["A"] = rdata.address
-
-# Create the directory for the nameserver configuration files
-conf_path = Path("for-conf")
-if not conf_path.exists():
-	conf_path.mkdir()
-
-# Create or increment the saved serial number for SOAs
-serial_file = Path("current_serial")
-if serial_file.exists():
-	serial_lines = serial_file.open(mode="rt").read().splitlines()
-	try:
-		current_serial_int = int(serial_lines[0])
-	except Exception:
-		exit(f'First line of "{str(serial_file)}" was "{serial_lines[0]}" instead of an integer. Exiting.')
-	with serial_file.open(mode="wt") as f:
-		f.write(f'{current_serial_int + 1}\n')		
-else:
-	with serial_file.open(mode="wt") as f:
-		f.write("1\n")
-
-zone_text_start = """$ORIGIN !DELEGATED_ZONE.
-$TTL 10
-@ IN  SOA example.com. nobody.example.com. !THIS_SERIAL 5m 1m 2w 5m
-@ IN NS !NS_DIR.
-"""
-
-# Go through the zones data file
-all_zones_file = zones_file.read_text()
-if not all_zones_file.startswith("^Z"):
-	exit(f'The file "{str(zones_file)}" did not start with "^Z". Exiting.')
-zones_found = {}
-current_zone_key = ""
-current_zone_text = zone_text_start
-for this_line in all_zones_file.splitlines(keepends=True):
-	# Check if this line is a comment (starts with ###)
-	if this_line.startswith("###"):
-		continue
-	# Check for start of new zone
-	if this_line.startswith("^Z"):
-		# Finish previous zone, but don't include empty one from the start
-		if current_zone_key:
-			zones_found[current_zone_key] = current_zone_text
-		# Start next zone
-		current_zone_key = this_line[2:].strip()
-		current_zone_text = zone_text_start
-		continue
-	else:
-		current_zone_text += this_line
-# Finish out the last zone
-zones_found[current_zone_key] = current_zone_text		
-
 # Template for knot.conf files
 knot_conf_template = """# knot.conf for !ZONE_NAME
 server:
@@ -116,20 +30,132 @@ policy:
 zone:
 """
 
+################ Add BIND template here
+
+# Prepare the zone files
+
+# The contents of the zone files are stored in a single text file
+#   The text file is line-based, with a "^Z" at the beginning of the line indicating a new server name & zone pair
+#   For example, "^Z ns1.something.example/foo.example" starts the foo.example zonefile served by ns1.something.example
+#   ;;DELEG indicates that the zone should be served from a DELEG-aware authoritative server
+#   ;;Q indicates a query that can test for this zone
+#   ;;R gives a string that should appear in one of the TXT records of the response
+#   ;;C is a comment what response should be expected
+#   ### at the beginning of a line indicates a comment that will not appear in the zone file
+
+# Be sure that the zone data is there
+zones_file = Path("zones-data.txt")
+if not zones_file.exists():
+	exit(f'Did not find file "{str(zones_file)}". Exiting.')
+
+# Create the directory for the nameserver configuration files
+for_hosts_path = Path("for-hosts")
+if not for_hosts_path.exists():
+	for_hosts_path.mkdir()
+conf_path = for_hosts_path / "conf"
+if not conf_path.exists():
+	conf_path.mkdir()
+
+# Be sure that the file with the nameservers is there
+nameserver_file = Path("nameserver-data.txt")
+if not nameserver_file.exists():
+	exit(f'Did not find file "{str(nameserver_file)}". Exiting.')
+
+all_nameservers = {}
+# Make the directories for the nameservers and get the IP addresses
+for this_line in nameserver_file.read_text().splitlines():
+	if this_line != "" and not this_line.startswith("#"):  # Igmore blank lines and comments
+		(this_nsname, this_nstype) = this_line.split(" ", maxsplit=1)
+		all_nameservers[this_nsname] = {"type": this_nstype}
+	# Create the directory
+	this_ns_dir = conf_path / this_nsname
+	this_ns_dir.mkdir(exist_ok=True)
+	# Get an IP address for this namesever; this saves the last A record found
+	#   Add IPv6 here ####################################################
+	try:
+		a_answers = dns.resolver.resolve(this_nsname, "A")
+	except Exception as e:
+		exit(f'Error in getting an A record for "{this_nsname}": "{e}". Exiting.')
+	for rdata in a_answers:
+		all_nameservers[this_nsname]["A"] = rdata.address
+	# Start the conf file from template
+	if all_nameservers[this_nsname]["type"] == "knot":
+		all_nameservers[this_nsname]["conf_text"] = knot_conf_template.replace("!ZONE_NAME", this_nsname).replace("!IP", all_nameservers[this_nsname]["A"])
+		# Start the conf file
+		this_knot_conf = this_ns_dir / "knot.conf"
+		this_knot_conf.write_text(all_nameservers[this_nsname]["conf_text"])
+	############################# Add BIND here
+
+# Create or increment the saved serial number for SOAs
+serial_file = Path("current_serial")
+if serial_file.exists():
+	serial_lines = serial_file.open(mode="rt").read().splitlines()
+	try:
+		current_serial_int = int(serial_lines[0])
+	except Exception:
+		exit(f'First line of "{str(serial_file)}" was "{serial_lines[0]}" instead of an integer. Exiting.')
+	with serial_file.open(mode="wt") as f:
+		f.write(f'{current_serial_int + 1}\n')		
+else:
+	with serial_file.open(mode="wt") as f:
+		f.write("1\n")
+
+zone_text_start = """$ORIGIN !DELEGATED_ZONE.
+$TTL 10
+@ IN  SOA example.com. nobody.example.com. !THIS_SERIAL 5m 1m 2w 5m
+@ IN NS !NS_DIR.
+""".replace("!THIS_SERIAL", str(current_serial_int))
+
+# Go through the zones data file
+all_zones_file = zones_file.read_text()
+if not all_zones_file.startswith("^Z"):
+	exit(f'The file "{str(zones_file)}" did not start with "^Z". Exiting.')
+zones_found = {}
+current_ns_and_zone = ""
+current_zone_text = zone_text_start
+for this_line in all_zones_file.splitlines(keepends=True):
+	# Check if this line is a comment (starts with ###)
+	if this_line.startswith("###"):
+		continue
+	# Check for start of new zone
+	if this_line.startswith("^Z"):
+		# Finish previous zone, but don't include empty one from the start
+		if current_ns_and_zone:
+			zones_found[current_ns_and_zone] = current_zone_text
+		# Start next zone
+		current_ns_and_zone = this_line[2:].strip()
+		current_zone_text = zone_text_start
+		continue
+	else:
+		current_zone_text += this_line
+# Finish out the last zone
+zones_found[current_ns_and_zone] = current_zone_text		
+
 # Go through the zones found to create the zone files, config files, and the queries / responses / comments
 all_qrc = []
-for (this_zone_found, this_zone_text) in zones_found.items():
-	(this_ns_name, zone_name) = this_zone_found.split("/")
-	if this_ns_name not in all_nameservers:
-		exit(f'When looking in "{str(zones_file)}", found a NS name "{this_ns_name}" that is not in "{str(nameserver_file)}". Exiting.')
-	this_ns_type = all_nameservers[this_ns_name]["type"]
-	this_ns_name_a = all_nameservers[this_ns_name]["A"]
-	# Create the directory
-	this_ns_dir = conf_path / this_ns_name
-	this_ns_dir.mkdir(exist_ok=True)
-	this_zone_contents = this_zone_text.replace("!DELEGATED_ZONE", zone_name).replace("!THIS_SERIAL", str(current_serial_int)).replace("!NS_DIR", zone_name)
+for (this_ns_and_zone, this_zone_text) in zones_found.items():
+	(this_nsname, zone_name) = this_ns_and_zone.split("/")
+	if this_nsname not in all_nameservers:
+		exit(f'When looking in "{str(zones_file)}", found a NS name "{this_nsname}" that is not in "{str(nameserver_file)}". Exiting.')
+	this_ns_type = all_nameservers[this_nsname]["type"]
+	this_nsname_a = all_nameservers[this_nsname]["A"]
+	this_ns_dir = conf_path / this_nsname 
+	this_zone_contents = this_zone_text.replace("!DELEGATED_ZONE", zone_name).replace("!NS_DIR", zone_name)
 	this_zone_file = this_ns_dir / (zone_name + ".zone")
 	this_zone_file.write_text(this_zone_contents)
+	# Create the nameserver conf file
+	if this_ns_type == "knot":
+		additional_knot_conf_text = f'  - domain: {zone_name}\n'
+		# Always sign all zones
+		additional_knot_conf_text += "    dnssec-signing: on\n    dnssec-policy: custom_policy\n"
+		if ";;DELEG" in this_zone_text:
+			additional_knot_conf_text += "    deleg-aware: on\n"
+		all_nameservers[this_nsname]["conf_text"] += additional_knot_conf_text
+		this_knot_conf = this_ns_dir / "knot.conf"
+		# Overwrite the current conf file with this evolving one
+		this_knot_conf.write_text(all_nameservers[this_nsname]["conf_text"])
+	elif this_ns_type == "bind":
+		print("Can't handle BIND NS yet") ####################################
 	# Save the queries / responses / comments
 	this_qrc = {}
 	for this_line in this_zone_text.splitlines():
@@ -140,19 +166,6 @@ for (this_zone_found, this_zone_text) in zones_found.items():
 		elif this_line.startswith(";;C"):
 			this_qrc["comment"] = this_line[4:]
 	all_qrc.append(this_qrc)
-	# Create the nameserver conf file
-	if this_ns_type == "knot":
-		all_nameservers[this_ns_name]["conf_text"] = knot_conf_template.replace("!ZONE_NAME", this_ns_name).replace("!IP", this_ns_name_a)
-		additional_knot_conf_text = f'  - domain: {zone_name}\n'
-		# Always sign all zones
-		additional_knot_conf_text += "    dnssec-signing: on\n    dnssec-policy: custom_policy\n"
-		if ";;DELEG" in this_zone_text:
-			additional_knot_conf_text += "    deleg-aware: on\n"
-		all_nameservers[this_ns_name]["conf_text"] += additional_knot_conf_text
-		this_knot_conf = this_ns_dir / "knot.conf"
-		this_knot_conf.write_text(all_nameservers[this_ns_name]["conf_text"])
-	elif this_ns_type == "bind":
-		print("Can't handle BIND NS yet") ####################################
 
 # Create program for queries and expected responses for Akamai and pyresolver
 
@@ -199,3 +212,74 @@ for this_zone_val in to_test:
 """.replace("QRC_GOES_HERE", str(all_qrc))
 testing_file = Path("run-tests.py")
 testing_file.write_text(testing_text)
+
+#######################################################################
+# Prepare nameservers and restart the server software
+
+# List of paths in conf_path; these are the names that make up the inventory of servers
+inv_paths = []
+server_names = []
+for this_thing in conf_path.glob("*"):
+	if this_thing.is_dir():
+		inv_paths.append(this_thing)
+		server_names.append(str(this_thing.name))
+
+inv_path = for_hosts_path / "inventory.py"  # Must end in .py to work with pyinfra
+inv_text = "server_hosts = [\n"
+for (this_nameserver_name, this_nameserver_data) in all_nameservers.items():
+	inv_text += f'   ("{this_nameserver_name}", {{"type": "{this_nameserver_data["type"]}"}}),\n'
+inv_text += "]\n"
+with inv_path.open(mode="wt") as f:
+	f.write(inv_text)
+
+opts_path = for_hosts_path / "operations.py"  # Must end in .py to work with pyinfra
+
+opts_contents = f'''root_home_dir = "{str(for_hosts_path)}/root-home"\nsource_dir = "{str(conf_path)}"\n'''
+opts_contents += """
+from pyinfra import host
+from pyinfra.operations import files, server, apt, git
+from pyinfra.facts.files import File, Directory
+
+files.sync(name="Copy root files", src=f'{root_home_dir}', dest="/root", delete=False)
+files.sync(name="Copy conf files", src=f'{source_dir}/'+host.name, dest="/root/conf", delete=True)
+
+git_source_dir = "/root/source"
+ns_target_dir = "/root/target"
+
+if host.data.get("type") == "knot":
+	if host.get_fact(File, "/root/target/var/run/knot/knot.pid"):
+		server.shell(name="Stop the Knot server", commands=["kill `cat /root/target/var/run/knot/knot.pid`"])
+	packages_str = "git libtool autoconf automake make pkg-config liburcu-dev libgnutls28-dev libedit-dev liblmdb-dev " +\
+		"libcap-ng-dev libsystemd-dev libidn2-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler libfstrm-dev libmaxminddb-dev "+\
+		"libnghttp2-dev libbpf-dev libxdp-dev libmnl-dev python3-sphinx python3-sphinx-panels softhsm2"
+	git_source = "https://gitlab.nic.cz/knot/knot-dns.git"
+	git_branch = "deleg_experimental"
+	making_commands = f"cd {git_source_dir} && git checkout {git_branch} && autoreconf -if && ./configure --prefix={ns_target_dir} " +\
+		"&& make && make install && ldconfig"
+elif host.data.get("type") == "bind":
+	packages_str = "build-essential git curl meson pkgconf libuv1-dev liblmdb-dev liburcu-dev libcap-dev libjemalloc-dev " +\
+		"libcrypto++-dev libssl-dev libuv1-dev"
+	git_source = "https://gitlab.isc.org/isc-projects/bind9.git"
+	git_branch = "each-deleg-auth"
+	making_commands = f"cd {git_source_dir} && git checkout {git_branch} && meson setup build-dir && meson compile -C build-dir " +\
+		f"&& meson install -C build-dir --destdir {ns_target_dir}"
+
+apt.packages(name="Do the apt", update=True, packages=packages_str.split(" "))
+
+if not host.get_fact(Directory, git_source_dir):
+	files.directory(name="Remove {git_source_dir}", path=git_source_dir, present=False, force=True)
+	files.directory(name=f"Remove {ns_target_dir}", path=ns_target_dir, present=False, force=True)
+	files.directory(name="Add {git_source_dir}", path=git_source_dir, present=True, force=True)
+	files.directory(name=f"Add {ns_target_dir}", path=ns_target_dir, present=True, force=True)
+	git.repo(name="Do the git pull", src=git_source, dest=git_source_dir, branch=git_branch)
+	server.shell(name="Make source from git", commands=making_commands)
+
+if host.data.get("type") == "knot":
+	server.shell(name="Start the Knot server", commands=["/root/target/sbin/knotd -c /root/conf/knot.conf -v -d"])
+"""
+
+with opts_path.open(mode="wt") as f:
+	f.write(opts_contents)
+
+the_infra_cmd = f'pyinfra -y --ssh-user=root {str(inv_path)} {str(opts_path)}'
+subprocess.run(the_infra_cmd, shell=True)
