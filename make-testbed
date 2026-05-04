@@ -238,7 +238,7 @@ opts_contents = f'''root_home_dir = "{str(for_hosts_path)}/root-home"\nsource_di
 opts_contents += """
 from pyinfra import host
 from pyinfra.operations import files, server, apt, git
-from pyinfra.facts.files import File, Directory
+from pyinfra.facts.files import File, Directory, FindDirectories
 
 files.sync(name="Copy root files", src=f'{root_home_dir}', dest="/root", delete=False)
 files.sync(name="Copy conf files", src=f'{source_dir}/'+host.name, dest="/root/conf", delete=True)
@@ -273,6 +273,14 @@ if not host.get_fact(Directory, git_source_dir):
 	files.directory(name=f"Add {ns_target_dir}", path=ns_target_dir, present=True, force=True)
 	git.repo(name="Do the git pull", src=git_source, dest=git_source_dir, branch=git_branch)
 	server.shell(name="Make source from git", commands=making_commands)
+
+if host.data.get("type") == "bind":
+	arch_names = host.get_fact(FindDirectories, f"{ns_target_dir}/usr/local/lib/", maxdepth=1)
+	if len(arch_names) == 2:
+		this_arch = arch_names[1]
+		server.shell(name="ldconfig", commands=[f"ldconfig {this_arch}"])
+	else:
+		print(f"Found {arch_names} which has more or less than two elements. Not doing the ldconfig.")
 
 if host.data.get("type") == "knot":
 	server.shell(name="Start the Knot server", commands=["/root/target/sbin/knotd -c /root/conf/knot.conf -v -d"])
