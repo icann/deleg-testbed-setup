@@ -48,6 +48,11 @@ zones_file = Path("zones-data.txt")
 if not zones_file.exists():
 	exit(f'Did not find file "{str(zones_file)}". Exiting.')
 
+# Be sure that the file with the nameservers is there
+nameserver_file = Path("nameserver-data.txt")
+if not nameserver_file.exists():
+	exit(f'Did not find file "{str(nameserver_file)}". Exiting.')
+
 # Create the directory for the nameserver configuration files
 for_hosts_path = Path("for-hosts")
 if not for_hosts_path.exists():
@@ -55,11 +60,6 @@ if not for_hosts_path.exists():
 conf_path = for_hosts_path / "conf"
 if not conf_path.exists():
 	conf_path.mkdir()
-
-# Be sure that the file with the nameservers is there
-nameserver_file = Path("nameserver-data.txt")
-if not nameserver_file.exists():
-	exit(f'Did not find file "{str(nameserver_file)}". Exiting.')
 
 all_nameservers = {}
 # Make the directories for the nameservers and get the IP addresses
