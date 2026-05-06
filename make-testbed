@@ -30,6 +30,14 @@ policy:
 zone:
 """
 
+bind_conf_template = """ # named.conf for !ZONE_NAME
+options { listen-on { !IP; }; };
+view "authoritative" {
+match-clients { any; };
+match-recursive-only no;
+recursion no;
+"""
+
 ################ Add BIND template here
 
 # Prepare the zone files
@@ -47,6 +55,9 @@ zone:
 zones_file = Path("zones-data.txt")
 if not zones_file.exists():
 	exit(f'Did not find file "{str(zones_file)}". Exiting.')
+initial_zones_data = zones_file.read_text()
+if not initial_zones_data.startswith("^Z"):
+	exit(f'The file "{str(zones_file)}" did not start with "^Z". Exiting.')
 
 # Be sure that the file with the nameservers is there
 nameserver_file = Path("nameserver-data.txt")
@@ -81,10 +92,13 @@ for this_line in nameserver_file.read_text().splitlines():
 	# Start the conf file from template
 	if all_nameservers[this_nsname]["type"] == "knot":
 		all_nameservers[this_nsname]["conf_text"] = knot_conf_template.replace("!ZONE_NAME", this_nsname).replace("!IP", all_nameservers[this_nsname]["A"])
-		# Start the conf file
-		this_knot_conf = this_ns_dir / "knot.conf"
-		this_knot_conf.write_text(all_nameservers[this_nsname]["conf_text"])
-	############################# Add BIND here
+	elif all_nameservers[this_nsname]["type"] == "bind":
+		all_nameservers[this_nsname]["conf_text"] = bind_conf_template.replace("!ZONE_NAME", this_nsname).replace("!IP", all_nameservers[this_nsname]["A"])
+
+# Turn initial_zones_data into all_zones_data by changing "test-x" into new types
+all_zones_data = ""
+for this_ns_type in ("knot", "bind"):
+	all_zones_data += initial_zones_data.replace("test-x", "test-" + this_ns_type)
 
 # Create or increment the saved serial number for SOAs
 serial_file = Path("current_serial")
@@ -107,13 +121,10 @@ $TTL 10
 """.replace("!THIS_SERIAL", str(current_serial_int))
 
 # Go through the zones data file
-all_zones_file = zones_file.read_text()
-if not all_zones_file.startswith("^Z"):
-	exit(f'The file "{str(zones_file)}" did not start with "^Z". Exiting.')
 zones_found = {}
 current_ns_and_zone = ""
 current_zone_text = zone_text_start
-for this_line in all_zones_file.splitlines(keepends=True):
+for this_line in all_zones_data.splitlines(keepends=True):
 	# Check if this line is a comment (starts with ###)
 	if this_line.startswith("###"):
 		continue
@@ -139,23 +150,35 @@ for (this_ns_and_zone, this_zone_text) in zones_found.items():
 		exit(f'When looking in "{str(zones_file)}", found a NS name "{this_nsname}" that is not in "{str(nameserver_file)}". Exiting.')
 	this_ns_type = all_nameservers[this_nsname]["type"]
 	this_nsname_a = all_nameservers[this_nsname]["A"]
-	this_ns_dir = conf_path / this_nsname 
-	this_zone_contents = this_zone_text.replace("!DELEGATED_ZONE", zone_name).replace("!NS_DIR", zone_name)
-	this_zone_file = this_ns_dir / (zone_name + ".zone")
-	this_zone_file.write_text(this_zone_contents)
-	# Create the nameserver conf file
+	if "test-knot" in zone_name:
+		this_zone_type = "knot"
+	elif "test-bind" in zone_name:
+		this_zone_type = "bind"
+	else:
+		exit(f'Found a name, {zone_name}, that did not have an expected "test-" name in it. Exiting.')
+	this_ns_dir = conf_path / this_nsname
+	this_zone_contents = this_zone_text.replace("!DELEGATED_ZONE", zone_name).replace("!NS_DIR", this_nsname)
+	# Update the nameserver conf file
 	if this_ns_type == "knot":
+		# Weird special case: do not put test-bind.deleg.top in k-deleg-ns.deleg.top
+		if zone_name == "test-bind.deleg.top" and this_nsname == "k-deleg-ns.deleg.top":
+			continue
 		additional_knot_conf_text = f'  - domain: {zone_name}\n'
 		# Always sign all zones
 		additional_knot_conf_text += "    dnssec-signing: on\n    dnssec-policy: custom_policy\n"
 		if ";;DELEG" in this_zone_text:
 			additional_knot_conf_text += "    deleg-aware: on\n"
 		all_nameservers[this_nsname]["conf_text"] += additional_knot_conf_text
-		this_knot_conf = this_ns_dir / "knot.conf"
-		# Overwrite the current conf file with this evolving one
-		this_knot_conf.write_text(all_nameservers[this_nsname]["conf_text"])
-	elif this_ns_type == "bind":
-		print("Can't handle BIND NS yet") ####################################
+		this_zone_file = this_ns_dir / (zone_name + ".zone")
+		this_zone_file.write_text(this_zone_contents)
+	elif this_ns_type == "bind" and this_zone_type == "bind":
+		additional_bind_conf_text = f'zone "{zone_name}" {{ type master; file "/root/conf/{zone_name}.zone"; dnssec-policy default; inline-signing yes; }};\n'
+		# No addition to named.conf for signing the zone
+		# No need to special process making the zone DELEG-enabled
+		all_nameservers[this_nsname]["conf_text"] += additional_bind_conf_text
+		this_zone_file = this_ns_dir / (zone_name + ".zone")
+		this_zone_file.write_text(this_zone_contents)
+	# No need to check the this_ns_type for existence again
 	# Save the queries / responses / comments
 	this_qrc = {}
 	for this_line in this_zone_text.splitlines():
@@ -166,6 +189,16 @@ for (this_ns_and_zone, this_zone_text) in zones_found.items():
 		elif this_line.startswith(";;C"):
 			this_qrc["comment"] = this_line[4:]
 	all_qrc.append(this_qrc)
+
+# Close off the named.conf
+for (this_nsname, this_ns_data) in all_nameservers.items():
+	this_ns_dir = conf_path / this_nsname
+	if this_ns_data["type"] == "knot":
+		this_knot_conf = this_ns_dir / "knot.conf"
+		this_knot_conf.write_text(all_nameservers[this_nsname]["conf_text"])
+	elif this_ns_data["type"] == "bind":
+		this_bind_conf = this_ns_dir / "named.conf"
+		this_bind_conf.write_text((all_nameservers[this_nsname]["conf_text"]) + "};\n")
 
 # Create program for queries and expected responses for Akamai and pyresolver
 
@@ -208,12 +241,11 @@ for this_zone_val in to_test:
 	if this_zone_val["response_id"] in res.stdout:
 		print(f'Found expected result, {this_zone_val["response_id"]}, for {this_zone_val['query']}')
 	else:
-		print(f'Did not find expected result for {this_zone_val['query']} in:{res.stdout}')
+		print(f'Did not find expected result for {this_zone_val['query']} in: {res.stdout}')
 """.replace("QRC_GOES_HERE", str(all_qrc))
 testing_file = Path("run-tests.py")
 testing_file.write_text(testing_text)
 
-#######################################################################
 # Prepare nameservers and restart the server software
 
 # List of paths in conf_path; these are the names that make up the inventory of servers
@@ -240,12 +272,15 @@ from pyinfra import host
 from pyinfra.operations import files, server, apt, git
 from pyinfra.facts.files import File, Directory, FindDirectories
 
+# Copy the basic root files and the configuration files
 files.sync(name="Copy root files", src=f'{root_home_dir}', dest="/root", delete=False)
 files.sync(name="Copy conf files", src=f'{source_dir}/'+host.name, dest="/root/conf", delete=True)
 
+# Where the git repos go; where they build into
 git_source_dir = "/root/source"
 ns_target_dir = "/root/target"
 
+# Stop the server and set up the commands for getting and making the servers
 if host.data.get("type") == "knot":
 	if host.get_fact(File, "/root/target/var/run/knot/knot.pid"):
 		server.shell(name="Stop the Knot server", commands=["kill `cat /root/target/var/run/knot/knot.pid`"])
@@ -257,6 +292,8 @@ if host.data.get("type") == "knot":
 	making_commands = f"cd {git_source_dir} && git checkout {git_branch} && autoreconf -if && ./configure --prefix={ns_target_dir} " +\
 		"&& make && make install && ldconfig"
 elif host.data.get("type") == "bind":
+	if host.get_fact(File, "/var/run/named/named.pid"):
+		server.shell(name="Stop the BIND server", commands=["kill `cat /var/run/named/named.pid`"])
 	packages_str = "build-essential git curl meson pkgconf libuv1-dev liblmdb-dev liburcu-dev libcap-dev libjemalloc-dev " +\
 		"libcrypto++-dev libssl-dev libuv1-dev"
 	git_source = "https://gitlab.isc.org/isc-projects/bind9.git"
@@ -264,26 +301,29 @@ elif host.data.get("type") == "bind":
 	making_commands = f"cd {git_source_dir} && git checkout {git_branch} && meson setup build-dir && meson compile -C build-dir " +\
 		f"&& meson install -C build-dir --destdir {ns_target_dir}"
 
-apt.packages(name="Do the apt", update=True, packages=packages_str.split(" "))
-
+# If we are just staring up, or we have manually removed the git source directory: refresh apt, make the directory, do the pull, and make
 if not host.get_fact(Directory, git_source_dir):
-	files.directory(name="Remove {git_source_dir}", path=git_source_dir, present=False, force=True)
+	apt.packages(name="Do the apt", update=True, packages=packages_str.split(" "))
 	files.directory(name=f"Remove {ns_target_dir}", path=ns_target_dir, present=False, force=True)
 	files.directory(name="Add {git_source_dir}", path=git_source_dir, present=True, force=True)
 	files.directory(name=f"Add {ns_target_dir}", path=ns_target_dir, present=True, force=True)
 	git.repo(name="Do the git pull", src=git_source, dest=git_source_dir, branch=git_branch)
 	server.shell(name="Make source from git", commands=making_commands)
+	# Do the ldconfig needed by BIND but not Knot
+	if host.data.get("type") == "bind":
+		arch_names = host.get_fact(FindDirectories, f"{ns_target_dir}/usr/local/lib/", maxdepth=1)
+		if len(arch_names) == 2:
+			this_arch = arch_names[1]
+			server.shell(name="ldconfig", commands=[f"ldconfig {this_arch}"])
+		else:
+			print(f"Found {arch_names} which has more or less than two elements. Not doing the ldconfig.")
 
-if host.data.get("type") == "bind":
-	arch_names = host.get_fact(FindDirectories, f"{ns_target_dir}/usr/local/lib/", maxdepth=1)
-	if len(arch_names) == 2:
-		this_arch = arch_names[1]
-		server.shell(name="ldconfig", commands=[f"ldconfig {this_arch}"])
-	else:
-		print(f"Found {arch_names} which has more or less than two elements. Not doing the ldconfig.")
-
+# Start the server
 if host.data.get("type") == "knot":
 	server.shell(name="Start the Knot server", commands=["/root/target/sbin/knotd -c /root/conf/knot.conf -v -d"])
+if host.data.get("type") == "bind":
+	server.shell(name="Start the BIND server", commands=["/root/target/usr/local/sbin/named  -c /root/conf/named.conf -L /root/log"])
+	
 """
 
 with opts_path.open(mode="wt") as f:
