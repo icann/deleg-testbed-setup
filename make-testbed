@@ -288,7 +288,7 @@ if host.data.get("type") == "knot":
 		"libcap-ng-dev libsystemd-dev libidn2-dev libprotobuf-c-dev protobuf-c-compiler protobuf-compiler libfstrm-dev libmaxminddb-dev "+\
 		"libnghttp2-dev libbpf-dev libxdp-dev libmnl-dev python3-sphinx python3-sphinx-panels softhsm2"
 	git_source = "https://gitlab.nic.cz/knot/knot-dns.git"
-	git_branch = "deleg_experimental"
+	git_branch = "master"
 	making_commands = f"cd {git_source_dir} && git checkout {git_branch} && autoreconf -if && ./configure --prefix={ns_target_dir} " +\
 		"&& make && make install && ldconfig"
 elif host.data.get("type") == "bind":
